@@ -10,11 +10,9 @@ import logging
 import random
 import string
 import time
-from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
-from fastapi.staticfiles import StaticFiles
 
 import game_logic as gl
 
@@ -24,15 +22,792 @@ log = logging.getLogger(__name__)
 
 app = FastAPI(title="Chinchón Multiplayer")
 
-# Serve static files (index.html)
-STATIC_DIR = Path(__file__).parent / "static"
-STATIC_DIR.mkdir(exist_ok=True)
+# HTML embedded directly — no static file dependency
+_INDEX_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chinchón — Multiplayer</title>
+<style>
+/* ── Reset & base ────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  height: 100%; min-height: 100vh;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  background: radial-gradient(ellipse at 50% 20%, #1d6b35 0%, #145228 55%, #0c3a1c 100%);
+  color: #fff;
+  overflow-x: hidden;
+}
+
+/* ── Lobby / Join screen ─────────────────────────────────────────────────── */
+#lobby {
+  display: flex; flex-direction: column; align-items: center;
+  justify-content: center; min-height: 100vh; gap: 18px; padding: 24px;
+}
+#lobby h1 { font-size: 3rem; font-weight: 900; color: #fbbf24; text-shadow: 0 2px 12px #0006; }
+#lobby p  { color: rgba(255,255,255,.6); font-size: .95rem; text-align: center; }
+.lobby-card {
+  background: rgba(0,0,0,.4); border: 1px solid rgba(255,255,255,.12);
+  border-radius: 14px; padding: 26px 32px; width: min(360px, 92vw);
+  display: flex; flex-direction: column; gap: 12px;
+}
+.lobby-card h2 { font-size: 1.1rem; color: #86efac; }
+input[type=text] {
+  width: 100%; padding: 10px 13px; border-radius: 8px; border: 1px solid rgba(255,255,255,.2);
+  background: rgba(255,255,255,.08); color: #fff; font-size: 1rem; outline: none;
+}
+input[type=text]::placeholder { color: rgba(255,255,255,.35); }
+input[type=text]:focus { border-color: #60a5fa; }
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 10px 18px; border-radius: 8px; border: none; cursor: pointer;
+  font-size: .95rem; font-weight: 700; transition: all .15s;
+}
+.btn:hover  { filter: brightness(1.1); transform: translateY(-1px); }
+.btn:active { transform: scale(.98); }
+.btn-green  { background: #16a34a; color: #fff; width: 100%; }
+.btn-blue   { background: #2563eb; color: #fff; width: 100%; }
+.btn-orange { background: #ea580c; color: #fff; }
+.btn-red    { background: #dc2626; color: #fff; }
+.btn-gray   { background: rgba(255,255,255,.15); color: #fff; }
+.btn-gold   { background: #d97706; color: #fff; }
+.btn-sm { padding: 5px 12px; font-size: .82rem; }
+.btn:disabled { opacity: .4; cursor: not-allowed; transform: none; }
+
+/* ── Game board ──────────────────────────────────────────────────────────── */
+#game { display: none; flex-direction: column; min-height: 100vh; }
+
+/* Header bar */
+#header {
+  background: rgba(0,0,0,.45); border-bottom: 1px solid rgba(255,255,255,.1);
+  padding: 8px 16px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+}
+#header .room-code {
+  font-size: .8rem; color: rgba(255,255,255,.5); letter-spacing: 2px; text-transform: uppercase;
+}
+#header .room-code span { color: #fbbf24; font-weight: 800; letter-spacing: 3px; }
+.score-box {
+  background: rgba(0,0,0,.3); border: 1px solid rgba(255,255,255,.1);
+  border-radius: 8px; padding: 5px 14px; text-align: center; min-width: 80px;
+}
+.score-box .sname { font-size: .65rem; color: rgba(255,255,255,.4); text-transform: uppercase; letter-spacing: 1px; }
+.score-box .sval  { font-size: 1.25rem; font-weight: 800; }
+.s-green  { color: #86efac; }
+.s-orange { color: #fb923c; }
+.s-red    { color: #f87171; }
+#header .spacer { flex: 1; }
+#turn-banner {
+  padding: 5px 14px; border-radius: 8px; font-size: .85rem; font-weight: 700;
+  transition: all .3s;
+}
+.turn-mine { background: #16a34a; color: #fff; }
+.turn-opp  { background: rgba(255,255,255,.12); color: rgba(255,255,255,.6); }
+
+/* Board layout */
+#board {
+  flex: 1; display: grid;
+  grid-template-rows: auto auto 1fr auto auto;
+  gap: 10px; padding: 12px 14px; max-width: 1100px; margin: 0 auto; width: 100%;
+}
+
+/* Section labels */
+.sec-lbl {
+  font-size: .65rem; font-weight: 700; letter-spacing: 2px;
+  color: rgba(255,255,255,.4); text-transform: uppercase; margin-bottom: 5px;
+}
+
+/* Opponent area */
+#opp-area { }
+#opp-name-row {
+  display: flex; align-items: center; gap: 10px; margin-bottom: 6px;
+}
+#opp-hand { display: flex; gap: 5px; flex-wrap: nowrap; }
+
+/* Table area */
+#table-area {
+  display: flex; gap: 14px; align-items: flex-start;
+  background: rgba(0,0,0,.15); border-radius: 10px; padding: 10px 14px;
+}
+.pile { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.pile-label { font-size: .7rem; color: rgba(255,255,255,.4); }
+
+/* Message */
+#msg-box {
+  background: rgba(0,0,0,.3); border: 1px solid rgba(255,255,255,.12);
+  border-radius: 8px; padding: 8px 14px; font-size: .85rem; text-align: center;
+  color: rgba(255,255,255,.8); min-height: 38px; flex: 1;
+}
+.msg-win  { border-color: #86efac !important; color: #86efac !important; }
+.msg-lose { border-color: #fca5a5 !important; color: #fca5a5 !important; }
+.msg-cc   { border-color: #fbbf24 !important; color: #fbbf24 !important; }
+
+/* Player area */
+#my-area { }
+#my-hand-row { display: flex; gap: 5px; flex-wrap: nowrap; overflow-x: auto; padding-bottom: 3px; }
+#swap-row     { display: flex; gap: 5px; margin-top: 5px; }
+#discard-row  { display: flex; gap: 5px; margin-top: 3px; }
+
+/* Action bar */
+#action-bar {
+  display: flex; gap: 8px; flex-wrap: wrap;
+  background: rgba(0,0,0,.25); border-radius: 10px; padding: 10px 12px;
+}
+
+/* Result overlay */
+#result-overlay {
+  display: none; position: fixed; inset: 0; background: rgba(0,0,0,.7);
+  z-index: 100; align-items: center; justify-content: center; padding: 20px;
+}
+#result-card {
+  background: #0f2d1a; border: 2px solid #fbbf24; border-radius: 16px;
+  padding: 30px 36px; max-width: 560px; width: 100%; text-align: center;
+}
+#result-card h2 { font-size: 1.5rem; font-weight: 800; margin-bottom: 10px; }
+
+/* ── Card SVG ─────────────────────────────────────────────────────────────── */
+.card-wrap { position: relative; display: inline-block; cursor: default; }
+.card-svg-outer {
+  width: 72px; height: 108px; border-radius: 7px; border: 1.5px solid #b8b8b8;
+  background: #FFFEF0; box-shadow: 2px 5px 10px rgba(0,0,0,.35);
+  position: relative; overflow: hidden; display: inline-block;
+  flex-shrink: 0; transition: transform .12s;
+}
+.card-svg-outer.glow-new   { border: 3px solid #60a5fa; box-shadow: 0 0 14px rgba(96,165,250,.65), 2px 5px 10px rgba(0,0,0,.4); }
+.card-svg-outer.glow-cc    { border: 3px solid #fbbf24; box-shadow: 0 0 18px #fbbf2480, 2px 5px 10px rgba(0,0,0,.4); }
+.card-svg-outer.glow-win   { border: 3px solid #22c55e; box-shadow: 0 0 12px #22c55e66, 2px 5px 10px rgba(0,0,0,.4); }
+.card-svg-outer.glow-meld  { border: 3px solid #fbbf24; box-shadow: 0 0 10px #fbbf2460; }
+.card-svg-outer:hover.clickable { transform: translateY(-6px); cursor: pointer; }
+.card-back {
+  width: 72px; height: 108px; border-radius: 7px;
+  background: linear-gradient(160deg,#1e40af,#2563eb 60%,#1e3a8a);
+  border: 2px solid #60a5fa; box-shadow: 2px 5px 10px rgba(0,0,0,.5);
+  display: inline-flex; align-items: center; justify-content: center;
+  flex-shrink: 0; font-size: 1.6rem; color: rgba(255,255,255,.2);
+}
+.card-corner {
+  position: absolute; font-size: 13px; font-weight: 900; line-height: 1;
+  text-shadow: 0 0 4px #fff8, 0 1px 2px #fff;
+}
+.card-corner.tl { top: 3px; left: 4px; }
+.card-corner.br { bottom: 3px; right: 4px; transform: rotate(180deg); }
+
+/* Swap / discard buttons below cards */
+.card-btn-col { width: 72px; display: flex; flex-direction: column; gap: 2px; }
+.card-btn-col .swap-pair { display: flex; gap: 2px; }
+.mini-btn {
+  flex: 1; padding: 3px 0; border-radius: 5px; border: none; cursor: pointer;
+  font-size: .75rem; font-weight: 700;
+  background: rgba(255,255,255,.12); color: rgba(255,255,255,.7);
+  transition: background .12s;
+}
+.mini-btn:hover:not(:disabled) { background: rgba(255,255,255,.25); }
+.mini-btn:disabled { opacity: .25; cursor: default; }
+.disc-btn {
+  width: 72px; padding: 4px 0; border-radius: 5px; border: none; cursor: pointer;
+  font-size: .75rem; font-weight: 700; transition: all .12s;
+  background: rgba(0,0,0,.35); color: rgba(255,255,255,.7);
+}
+.disc-btn.d-stop    { background: #16a34a; color: #fff; }
+.disc-btn.d-chinchon { background: #d97706; color: #fff; font-size: .7rem; }
+.disc-btn:hover:not(:disabled) { filter: brightness(1.15); }
+.disc-btn:disabled { opacity: .3; cursor: default; }
+
+/* Meld display */
+.meld-block { margin-top: 8px; text-align: left; }
+.meld-label { font-size: .7rem; color: rgba(255,255,255,.45); margin-bottom: 4px; }
+.meld-row { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 6px; }
+
+/* Penalty row */
+.penalty-row { display: flex; gap: 20px; justify-content: center; margin: 10px 0; }
+.pen-box { text-align: center; }
+.pen-name { font-size: .7rem; color: rgba(255,255,255,.4); text-transform: uppercase; letter-spacing: 1px; }
+.pen-val  { font-size: 1.2rem; font-weight: 800; }
+
+/* Waiting spinner */
+.waiting { text-align: center; padding: 20px; color: rgba(255,255,255,.5); }
+.dot-spin { display: inline-block; animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Legend */
+#legend {
+  text-align: center; font-size: .65rem; color: rgba(255,255,255,.25);
+  padding: 6px 10px 10px;
+}
+
+/* Disconnection banner */
+#dc-banner {
+  display: none; position: fixed; top: 0; left: 0; right: 0;
+  background: #7f1d1d; color: #fca5a5; text-align: center;
+  padding: 8px 14px; font-size: .85rem; z-index: 200;
+}
+</style>
+</head>
+<body>
+
+<!-- ══ LOBBY ══════════════════════════════════════════════════════════════════ -->
+<div id="lobby">
+  <h1>🃏 Chinchón</h1>
+  <p>Baraja Española · 40 cards · 2 players</p>
+
+  <div class="lobby-card">
+    <h2>👤 Your name</h2>
+    <input type="text" id="inp-name" placeholder="Enter your name…" maxlength="20">
+  </div>
+
+  <div class="lobby-card">
+    <h2>🆕 Create a room</h2>
+    <p>Share the 4-letter code with your opponent.</p>
+    <button class="btn btn-green" onclick="createRoom()">Create Room</button>
+  </div>
+
+  <div class="lobby-card">
+    <h2>🔗 Join a room</h2>
+    <input type="text" id="inp-room" placeholder="Room code (e.g. ABCD)" maxlength="4"
+           style="text-transform:uppercase;letter-spacing:3px;">
+    <button class="btn btn-blue" onclick="joinRoom()">Join Room</button>
+  </div>
+
+  <div id="lobby-msg" style="color:#fca5a5;font-size:.85rem;display:none;"></div>
+</div>
+
+<!-- ══ GAME BOARD ══════════════════════════════════════════════════════════════ -->
+<div id="game">
+  <div id="dc-banner">⚠ Opponent disconnected — waiting for them to rejoin…</div>
+
+  <!-- Header -->
+  <div id="header">
+    <div class="room-code">Room <span id="hdr-room">—</span></div>
+    <div class="score-box">
+      <div class="sname" id="score0-name">—</div>
+      <div class="sval"  id="score0-val">0</div>
+    </div>
+    <div class="score-box">
+      <div class="sname" id="score1-name">—</div>
+      <div class="sval"  id="score1-val">0</div>
+    </div>
+    <div class="spacer"></div>
+    <div id="turn-banner" class="turn-opp">Waiting…</div>
+    <button class="btn btn-gold btn-sm" id="btn-declare" onclick="sendDeclare()" style="display:none">✋ Declare Win</button>
+    <button class="btn btn-orange btn-sm" onclick="sendReset()">🔄 Reset</button>
+  </div>
+
+  <!-- Board -->
+  <div id="board">
+    <!-- Opponent hand -->
+    <div id="opp-area">
+      <div id="opp-name-row">
+        <div class="sec-lbl" id="opp-label">Opponent</div>
+      </div>
+      <div id="opp-hand"></div>
+    </div>
+
+    <!-- Table: deck + discard + message -->
+    <div id="table-area">
+      <div class="pile">
+        <div class="pile-label">📦 Deck</div>
+        <div id="deck-card" class="card-back clickable" onclick="drawDeck()">✦</div>
+        <div style="font-size:.65rem;color:rgba(255,255,255,.35);margin-top:2px;" id="deck-count"></div>
+      </div>
+      <div class="pile">
+        <div class="pile-label">🗃 Discard</div>
+        <div id="discard-card"></div>
+      </div>
+      <div id="msg-box">Connecting…</div>
+    </div>
+
+    <!-- Player hand label -->
+    <div id="my-area">
+      <div class="sec-lbl">🧑 Your hand &nbsp;·&nbsp; <span style="opacity:.5;font-size:.6rem;">← → to reorder</span></div>
+      <!-- Cards -->
+      <div id="my-hand-row"></div>
+      <!-- Swap buttons -->
+      <div id="swap-row"></div>
+      <!-- Discard buttons -->
+      <div id="discard-row"></div>
+    </div>
+
+    <!-- Legend -->
+    <div id="legend">
+      🪙 Oros &nbsp;·&nbsp; 🍷 Copas &nbsp;·&nbsp; ⚔️ Espadas &nbsp;·&nbsp; 🏑 Bastos
+      &nbsp;&nbsp;|&nbsp;&nbsp;
+      A 2 3 4 5 6 7 10 11 12
+      &nbsp;&nbsp;|&nbsp;&nbsp;
+      Blue glow = just drawn &nbsp;·&nbsp; Gold glow = Chinchón &nbsp;·&nbsp; Green glow = Stop
+    </div>
+  </div>
+</div>
+
+<!-- ══ RESULT OVERLAY ══════════════════════════════════════════════════════════ -->
+<div id="result-overlay">
+  <div id="result-card">
+    <div id="res-emoji" style="font-size:2.5rem;margin-bottom:6px;">🎉</div>
+    <h2 id="res-title">—</h2>
+    <div id="res-penalties" class="penalty-row" style="margin:12px 0;"></div>
+    <div id="res-melds"></div>
+    <div id="res-unmatched"></div>
+    <div style="display:flex;gap:10px;justify-content:center;margin-top:18px;">
+      <button class="btn btn-green" id="btn-next" onclick="sendNextHand()">▶ Next Hand</button>
+      <button class="btn btn-orange" onclick="sendReset()">🔄 New Game</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ═════════════════════════════════════════════════════════════════════════════
+//  SVG CARD RENDERING
+// ═════════════════════════════════════════════════════════════════════════════
+const CW = 72, CH = 108;
+
+const POS = {
+  1: [[36,54]],
+  2: [[36,30],[36,78]],
+  3: [[36,24],[36,54],[36,84]],
+  4: [[22,32],[50,32],[22,76],[50,76]],
+  5: [[22,24],[50,24],[36,54],[22,84],[50,84]],
+  6: [[22,24],[50,24],[22,54],[50,54],[22,84],[50,84]],
+  7: [[22,20],[50,20],[36,38],[22,54],[50,54],[22,76],[50,76]],
+};
+const SZS = {1:15,2:13,3:12,4:10,5:9,6:9,7:8};
+
+function f(n) { return (+n).toFixed(1); }
+
+function symSvg(suit, cx, cy, sz) {
+  if (suit === 'Oros') {
+    const sw = Math.max(1.1, sz*0.12);
+    return `<circle cx="${f(cx)}" cy="${f(cy)}" r="${f(sz)}" fill="#F6C820" stroke="#A07818" stroke-width="${f(sw)}"/>
+            <circle cx="${f(cx)}" cy="${f(cy)}" r="${f(sz*0.62)}" fill="none" stroke="#A07818" stroke-width="${f(sw*0.55)}"/>
+            <circle cx="${f(cx)}" cy="${f(cy)}" r="${f(sz*0.26)}" fill="#A07818"/>`;
+  }
+  if (suit === 'Espadas') {
+    const bw = Math.max(1.4, sz*0.17), gw = sz*0.72;
+    return `<polygon points="${f(cx)},${f(cy-sz)} ${f(cx-bw)},${f(cy-sz*0.28)} ${f(cx+bw)},${f(cy-sz*0.28)}" fill="#4068B8"/>
+            <rect x="${f(cx-bw)}" y="${f(cy-sz*0.28)}" width="${f(bw*2)}" height="${f(sz*0.54)}" fill="#4068B8"/>
+            <rect x="${f(cx-gw)}" y="${f(cy+sz*0.24)}" width="${f(gw*2)}" height="${f(sz*0.17)}" fill="#9B6E22" rx="2"/>
+            <rect x="${f(cx-bw*1.6)}" y="${f(cy+sz*0.41)}" width="${f(bw*3.2)}" height="${f(sz*0.59)}" fill="#7A4C18" rx="2"/>`;
+  }
+  if (suit === 'Copas') {
+    const bw=sz*0.86, bh=sz*0.70, y0=cy-sz, ym=y0+bh;
+    const sw2=sz*0.15, sh=sz*0.42, baw=sz*0.58;
+    return `<path d="M${f(cx-bw)},${f(y0)} Q${f(cx-bw)},${f(ym)} ${f(cx)},${f(ym)} Q${f(cx+bw)},${f(ym)} ${f(cx+bw)},${f(y0)} Z" fill="#CC1800" stroke="#880000" stroke-width="0.9"/>
+            <rect x="${f(cx-sw2)}" y="${f(ym)}" width="${f(sw2*2)}" height="${f(sh)}" fill="#AA1400"/>
+            <ellipse cx="${f(cx)}" cy="${f(ym+sh)}" rx="${f(baw)}" ry="${f(sz*0.17)}" fill="#880000"/>`;
+  }
+  // Bastos
+  const ang=20*Math.PI/180, rx_=Math.max(3.5,sz*0.30), kr=Math.max(4.0,sz*0.40);
+  const tx=cx-Math.sin(ang)*sz, ty=cy-Math.cos(ang)*sz;
+  const bx=cx+Math.sin(ang)*sz, by_=cy+Math.cos(ang)*sz;
+  return `<ellipse cx="${f(cx)}" cy="${f(cy)}" rx="${f(rx_)}" ry="${f(sz)}" fill="#589030" stroke="#286010" stroke-width="0.8" transform="rotate(20,${f(cx)},${f(cy)})"/>
+          <circle cx="${f(tx)}" cy="${f(ty)}" r="${f(kr)}" fill="#487820"/>
+          <circle cx="${f(bx)}" cy="${f(by_)}" r="${f(kr)}" fill="#487820"/>`;
+}
+
+function faceBodySvg(suit, v) {
+  const cx=CW/2, cy=CH/2;
+  const band={Oros:'#C89010',Espadas:'#2050A0',Copas:'#AA1400',Bastos:'#2E6818'}[suit];
+  let out = `<rect x="0" y="0" width="${CW}" height="28" fill="${band}" opacity="0.35" rx="5"/>
+             <rect x="0" y="${CH-28}" width="${CW}" height="28" fill="${band}" opacity="0.35"/>`;
+  if (v===10) { // Sota
+    out += `<circle cx="${cx}" cy="${cy-24}" r="10" fill="#FDBF78" stroke="#8B5A28" stroke-width="1"/>
+            <rect x="${cx-11}" y="${cy-14}" width="22" height="30" rx="4" fill="${band}"/>
+            <rect x="${cx-8}" y="${cy+16}" width="7" height="18" rx="3" fill="${band}"/>
+            <rect x="${cx+1}" y="${cy+16}" width="7" height="18" rx="3" fill="${band}"/>
+            <rect x="${cx-18}" y="${cy-11}" width="8" height="14" rx="3" fill="${band}"/>
+            <rect x="${cx+10}" y="${cy-11}" width="8" height="14" rx="3" fill="${band}"/>`;
+  } else if (v===11) { // Caballo
+    out += `<ellipse cx="${cx}" cy="${cy+16}" rx="19" ry="10" fill="#D0A070"/>
+            <circle cx="${cx+16}" cy="${cy+6}" r="7" fill="#D0A070"/>
+            <rect x="${cx-15}" y="${cy+24}" width="5" height="14" rx="2" fill="#B08050"/>
+            <rect x="${cx-6}" y="${cy+24}" width="5" height="14" rx="2" fill="#B08050"/>
+            <rect x="${cx+4}" y="${cy+24}" width="5" height="14" rx="2" fill="#B08050"/>
+            <rect x="${cx+12}" y="${cy+24}" width="5" height="14" rx="2" fill="#B08050"/>
+            <circle cx="${cx-2}" cy="${cy-16}" r="9" fill="#FDBF78" stroke="#8B5A28" stroke-width="1"/>
+            <rect x="${cx-10}" y="${cy-7}" width="19" height="22" rx="3" fill="${band}"/>`;
+  } else { // Rey
+    out += `<circle cx="${cx}" cy="${cy-22}" r="10" fill="#FDBF78" stroke="#8B5A28" stroke-width="1"/>
+            <polygon points="${cx-10},${cy-31} ${cx-10},${cy-40} ${cx-4},${cy-33} ${cx},${cy-42} ${cx+4},${cy-33} ${cx+10},${cy-40} ${cx+10},${cy-31}" fill="#F8C820" stroke="#A07010" stroke-width="1.2"/>
+            <circle cx="${cx}" cy="${cy-37}" r="3.5" fill="#CC2020"/>
+            <polygon points="${cx-15},${cy-12} ${cx+15},${cy-12} ${cx+19},${cy+36} ${cx-19},${cy+36}" fill="${band}"/>
+            <rect x="${cx-14}" y="${cy+2}" width="28" height="6" fill="#F8C820"/>
+            <rect x="${cx-22}" y="${cy-10}" width="9" height="16" rx="3" fill="${band}"/>
+            <rect x="${cx+13}" y="${cy-10}" width="9" height="16" rx="3" fill="${band}"/>`;
+  }
+  out += symSvg(suit, cx, cy+30, 9);
+  return out;
+}
+
+function cardSvgInner(c) {
+  if (c.v >= 10) return faceBodySvg(c.s, c.v);
+  return (POS[c.v]||[[36,54]]).map(([px,py]) => symSvg(c.s, px, py, SZS[c.v]||9)).join('');
+}
+
+function renderCard(c, opts={}) {
+  // opts: {clickable, glowClass, small}
+  const glowClass = opts.glowClass || '';
+  const clickCls  = opts.clickable ? ' clickable' : '';
+  const body = cardSvgInner(c);
+  return `<div class="card-svg-outer${glowClass ? ' '+glowClass : ''}${clickCls}">
+    <svg width="${CW}" height="${CH}" xmlns="http://www.w3.org/2000/svg"
+         style="position:absolute;top:0;left:0;">${body}</svg>
+    <span class="card-corner tl" style="color:${c.color}">${c.label}</span>
+    <span class="card-corner br" style="color:${c.color}">${c.label}</span>
+  </div>`;
+}
+
+function renderBack() {
+  return `<div class="card-back">✦</div>`;
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  WEBSOCKET CLIENT
+// ═════════════════════════════════════════════════════════════════════════════
+let ws = null;
+let myPlayer = -1;
+let roomCode = '';
+let state    = null;
+
+function wsUrl() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  return `${proto}://${location.host}/ws`;
+}
+
+function connect(firstMsg) {
+  ws = new WebSocket(wsUrl());
+  ws.onopen = () => {
+    ws.send(JSON.stringify(firstMsg));
+    clearLobbyError();
+  };
+  ws.onmessage = e => handleMsg(JSON.parse(e.data));
+  ws.onclose = () => {
+    if (myPlayer >= 0) showDcBanner(true);
+    setTimeout(() => reconnect(), 3000);
+  };
+  ws.onerror = () => {};
+}
+
+function reconnect() {
+  if (roomCode && myPlayer >= 0) {
+    const name = document.getElementById('inp-name').value.trim() || 'Player';
+    connect({ action:'join', room: roomCode, name });
+  }
+}
+
+function send(obj) {
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+}
+
+// ── Lobby actions ──────────────────────────────────────────────────────────
+function getName() {
+  return (document.getElementById('inp-name').value.trim() || 'Player').slice(0,20);
+}
+function showLobbyError(msg) {
+  const el = document.getElementById('lobby-msg');
+  el.textContent = msg; el.style.display='block';
+}
+function clearLobbyError() {
+  document.getElementById('lobby-msg').style.display='none';
+}
+function createRoom() { connect({ action:'create', name: getName() }); }
+function joinRoom()   {
+  const code = document.getElementById('inp-room').value.toUpperCase().trim();
+  if (!code) { showLobbyError('Enter a room code.'); return; }
+  connect({ action:'join', room:code, name: getName() });
+}
+
+// ── Game actions ───────────────────────────────────────────────────────────
+function drawDeck()     { send({action:'draw_deck'}); }
+function drawDiscard()  { send({action:'draw_discard'}); }
+function discard(idx)   { send({action:'discard', idx}); }
+function sendMove(i,j)  { send({action:'move', i, j}); }
+function sendDeclare()  { send({action:'declare'}); }
+function sendNextHand() { closeResult(); send({action:'next_hand'}); }
+function sendReset()    { closeResult(); send({action:'reset'}); }
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  MESSAGE HANDLER
+// ═════════════════════════════════════════════════════════════════════════════
+function handleMsg(msg) {
+  showDcBanner(false);
+
+  if (msg.type === 'created') {
+    myPlayer = 0;
+    roomCode = msg.room;
+    showGame();
+    document.getElementById('hdr-room').textContent = msg.room;
+    document.getElementById('msg-box').textContent =
+      `Room ${msg.room} created! Waiting for opponent…`;
+    return;
+  }
+  if (msg.type === 'joined') {
+    myPlayer = msg.player;
+    roomCode = msg.room;
+    showGame();
+    document.getElementById('hdr-room').textContent = msg.room;
+    return;
+  }
+  if (msg.type === 'lobby') {
+    document.getElementById('hdr-room').textContent = msg.room;
+    if (msg.waiting) {
+      document.getElementById('msg-box').textContent =
+        `Room ${msg.room} — waiting for opponent…`;
+    }
+    return;
+  }
+  if (msg.type === 'error') { showLobbyError(msg.msg); return; }
+  if (msg.type === 'player_left') {
+    showDcBanner(true, msg.msg); return;
+  }
+  if (msg.type === 'pong') return;
+  if (msg.type === 'state') {
+    state = msg;
+    renderState(msg);
+    return;
+  }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  RENDER
+// ═════════════════════════════════════════════════════════════════════════════
+function showGame() {
+  document.getElementById('lobby').style.display = 'none';
+  document.getElementById('game').style.display  = 'flex';
+}
+
+function scoreColor(pts) {
+  if (pts >= 80) return 's-red';
+  if (pts >= 50) return 's-orange';
+  return 's-green';
+}
+
+function renderState(s) {
+  // Scores
+  const names = s.names;
+  for (let i=0;i<2;i++) {
+    const el = document.getElementById(`score${i}-val`);
+    el.textContent = s.scores[i];
+    el.className = `sval ${scoreColor(s.scores[i])}`;
+    document.getElementById(`score${i}-name`).textContent = names[i] || '—';
+  }
+
+  // Turn banner
+  const tb = document.getElementById('turn-banner');
+  if (s.my_turn) {
+    tb.textContent = '🟢 Your turn';
+    tb.className = 'turn-mine';
+  } else {
+    tb.textContent = `⏳ ${names[1-myPlayer]}'s turn`;
+    tb.className = 'turn-opp';
+  }
+
+  // Declare Win button
+  const btnDecl = document.getElementById('btn-declare');
+  btnDecl.style.display = s.can_declare ? '' : 'none';
+
+  // Message
+  const msgBox = document.getElementById('msg-box');
+  msgBox.textContent = s.message;
+  msgBox.className = 'msg-box';
+  if (s.result) {
+    if (s.result.includes(`p${myPlayer}`)) msgBox.classList.add(s.result.includes('cc') ? 'msg-cc' : 'msg-win');
+    else msgBox.classList.add('msg-lose');
+  }
+
+  // Opponent label + hand
+  const oppIdx = s.opp_idx;
+  document.getElementById('opp-label').textContent =
+    `🤖 ${names[oppIdx]} (${s.opp_hand.length} cards)`;
+  const oppHandEl = document.getElementById('opp-hand');
+  oppHandEl.innerHTML = '';
+  for (const c of s.opp_hand) {
+    if (c.facedown) {
+      oppHandEl.insertAdjacentHTML('beforeend', renderBack());
+    } else {
+      const gc = c.is_win ? 'glow-meld' : '';
+      oppHandEl.insertAdjacentHTML('beforeend', renderCard(c, {glowClass: gc}));
+    }
+  }
+
+  // Deck card (clickable only on your draw turn)
+  const canDrawDeck = s.my_turn && s.phase === 'draw';
+  document.getElementById('deck-card').className =
+    `card-back${canDrawDeck ? ' clickable' : ''}`;
+  document.getElementById('deck-card').onclick = canDrawDeck ? drawDeck : null;
+  document.getElementById('deck-count').textContent = `${s.deck_size} cards`;
+
+  // Discard pile top
+  const discEl = document.getElementById('discard-card');
+  if (s.discard_top) {
+    const canTake = s.my_turn && s.phase === 'draw';
+    const gc = '';
+    discEl.innerHTML = `<div onclick="${canTake ? 'drawDiscard()' : ''}" style="cursor:${canTake?'pointer':'default'}">` +
+                        renderCard(s.discard_top, {clickable: canTake}) + '</div>';
+  } else {
+    discEl.innerHTML = `<div style="width:72px;height:108px;border:1px dashed rgba(255,255,255,.2);border-radius:7px;display:flex;align-items:center;justify-content:center;color:rgba(255,255,255,.25);font-size:.75rem;">Empty</div>`;
+  }
+
+  // My hand
+  renderMyHand(s);
+
+  // Result overlay
+  const finished = ['hand_over','match_over'].includes(s.phase);
+  if (finished) showResult(s);
+}
+
+function renderMyHand(s) {
+  const hand       = s.my_hand;
+  const phase      = s.phase;
+  const myTurn     = s.my_turn;
+  const canDiscard = myTurn && phase === 'discard';
+  const canMove    = myTurn && ['draw','discard'].includes(phase);
+  const winSet     = new Set(s.win_idx.map(([i]) => i));
+  const winCC      = new Set(s.win_idx.filter(([,cc]) => cc).map(([i]) => i));
+
+  const handRow    = document.getElementById('my-hand-row');
+  const swapRow    = document.getElementById('swap-row');
+  const discRow    = document.getElementById('discard-row');
+  handRow.innerHTML = '';
+  swapRow.innerHTML = '';
+  discRow.innerHTML = '';
+
+  hand.forEach((c, i) => {
+    // Card glow
+    let gc = '';
+    if (c.is_new) gc = 'glow-new';
+    else if (c.is_cc) gc = 'glow-cc';
+    else if (c.is_win) gc = 'glow-win';
+
+    handRow.insertAdjacentHTML('beforeend',
+      `<div class="card-wrap">${renderCard(c, {glowClass: gc})}</div>`);
+  });
+
+  // Swap buttons row
+  hand.forEach((c, i) => {
+    const lDis = !canMove || i === 0;
+    const rDis = !canMove || i === hand.length - 1;
+    const col = document.createElement('div');
+    col.className = 'card-btn-col';
+    col.innerHTML = `<div class="swap-pair">
+      <button class="mini-btn" ${lDis?'disabled':''} onclick="sendMove(${i},${i-1})">←</button>
+      <button class="mini-btn" ${rDis?'disabled':''} onclick="sendMove(${i},${i+1})">→</button>
+    </div>`;
+    swapRow.appendChild(col);
+  });
+
+  // Discard buttons row (only in discard phase)
+  if (canDiscard) {
+    hand.forEach((c, i) => {
+      const col = document.createElement('div');
+      const isCC  = winCC.has(i);
+      const isWin = winSet.has(i);
+      let cls = '', lbl = '↓';
+      if (isCC)       { cls = 'd-chinchon'; lbl = '🏅'; }
+      else if (isWin) { cls = 'd-stop';     lbl = '✋'; }
+      col.innerHTML =
+        `<button class="disc-btn ${cls}" onclick="discard(${i})">${lbl}</button>`;
+      discRow.appendChild(col);
+    });
+  }
+}
+
+// ── Result overlay ─────────────────────────────────────────────────────────
+function showResult(s) {
+  const result = s.result || '';
+  const myWin  = result.includes(`p${myPlayer}`) && !result.includes('declare');
+  const isCC   = result.includes('_cc');
+  const isDcl  = result === 'declare';
+  const isMatchOver = s.phase === 'match_over';
+
+  const overlay = document.getElementById('result-overlay');
+  overlay.style.display = 'flex';
+
+  // Emoji + title
+  document.getElementById('res-emoji').textContent =
+    isCC ? '🏅' : myWin ? '🎉' : isDcl ? '🗒️' : '😔';
+  document.getElementById('res-title').textContent = s.message;
+  document.getElementById('res-title').style.color =
+    isCC ? '#fbbf24' : myWin ? '#86efac' : isDcl ? '#fb923c' : '#fca5a5';
+
+  // Penalties
+  const penDiv = document.getElementById('res-penalties');
+  penDiv.innerHTML = '';
+  const pens = s.penalties || [null, null];
+  [0,1].forEach(i => {
+    if (pens[i] === null || pens[i] === 'cc') return;
+    const box = document.createElement('div');
+    box.className = 'pen-box';
+    const val = pens[i];
+    const col = val < 0 ? '#86efac' : val === 0 ? 'rgba(255,255,255,.5)' : '#fca5a5';
+    const sign = val > 0 ? '+' : '';
+    box.innerHTML = `<div class="pen-name">${s.names[i]}</div>
+                     <div class="pen-val" style="color:${col}">${sign}${val} pts</div>`;
+    penDiv.appendChild(box);
+  });
+
+  // Melds
+  const meldsDiv = document.getElementById('res-melds');
+  meldsDiv.innerHTML = '';
+  if (s.melds && s.melds.length) {
+    for (const m of s.melds) {
+      const block = document.createElement('div');
+      block.className = 'meld-block';
+      block.innerHTML = `<div class="meld-label">${m.kind}</div>
+        <div class="meld-row">${m.cards.map(c => renderCard(c)).join('')}</div>`;
+      meldsDiv.appendChild(block);
+    }
+  }
+
+  // Unmatched cards
+  const unmDiv = document.getElementById('res-unmatched');
+  unmDiv.innerHTML = '';
+  const addUnm = (cards, who, pts) => {
+    if (!cards || cards.length === 0) return;
+    const block = document.createElement('div');
+    block.className = 'meld-block';
+    block.innerHTML = `<div class="meld-label">${who} unmatched (+${pts} pts)</div>
+      <div class="meld-row">${cards.map(c => renderCard(c)).join('')}</div>`;
+    unmDiv.appendChild(block);
+  };
+  const oppPen = s.penalties ? s.penalties[s.opp_idx] : null;
+  const myPen  = s.penalties ? s.penalties[myPlayer]  : null;
+  addUnm(s.unmatched_mine, 'Your', myPen || 0);
+  addUnm(s.unmatched_opp, s.names[s.opp_idx], oppPen || 0);
+
+  // Next button label
+  document.getElementById('btn-next').textContent =
+    isMatchOver ? '🎮 New Match' : '▶ Next Hand';
+}
+
+function closeResult() {
+  document.getElementById('result-overlay').style.display = 'none';
+}
+
+// ── UI helpers ─────────────────────────────────────────────────────────────
+function showDcBanner(show, msg) {
+  const el = document.getElementById('dc-banner');
+  el.style.display = show ? '' : 'none';
+  if (msg) el.textContent = msg;
+}
+
+// ── Heartbeat ──────────────────────────────────────────────────────────────
+setInterval(() => { if (ws && ws.readyState === WebSocket.OPEN) send({action:'ping'}); }, 20000);
+
+// ── Keyboard shortcuts ─────────────────────────────────────────────────────
+document.addEventListener('keydown', e => {
+  if (!state || !state.my_turn) return;
+  // Enter in lobby name field → create room
+  const focused = document.activeElement;
+  if (focused && focused.id === 'inp-name' && e.key === 'Enter') createRoom();
+  if (focused && focused.id === 'inp-room' && e.key === 'Enter') joinRoom();
+});
+</script>
+</body>
+</html>
+"""
 
 
 @app.api_route("/", methods=["GET", "HEAD"])
 async def root():
-    html = (STATIC_DIR / "index.html").read_text()
-    return HTMLResponse(html)
+    return HTMLResponse(_INDEX_HTML)
 
 
 # ── Room management ────────────────────────────────────────────────────────────
