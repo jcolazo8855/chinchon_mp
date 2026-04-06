@@ -29,7 +29,7 @@ STATIC_DIR = Path(__file__).parent / "static"
 STATIC_DIR.mkdir(exist_ok=True)
 
 
-@app.get("/")
+@app.api_route("/", methods=["GET", "HEAD"])
 async def root():
     html = (STATIC_DIR / "index.html").read_text()
     return HTMLResponse(html)
