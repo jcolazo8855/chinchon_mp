@@ -1,0 +1,91 @@
+# 🃏 Chinchón Multiplayer
+
+Real-time 2-player Chinchón (Spanish card game) built with **FastAPI + WebSockets + vanilla JS**.
+
+## Quick start (local)
+
+```bash
+pip install -r requirements.txt
+python server.py
+```
+
+Open **http://localhost:8000** in two browser tabs (or two devices on the same network using your IP, e.g. `http://192.168.1.x:8000`).
+
+One player creates a room, shares the 4-letter code, the other joins.
+
+---
+
+## File structure
+
+```
+chinchon_mp/
+├── server.py          FastAPI + WebSocket server + room management
+├── game_logic.py      Pure Python game logic (no dependencies)
+├── static/
+│   └── index.html     Complete single-file frontend (HTML + CSS + JS)
+└── requirements.txt
+```
+
+---
+
+## Free cloud deployment
+
+### Railway (recommended — easiest)
+
+1. Push the folder to a GitHub repo
+2. Go to [railway.app](https://railway.app) → New Project → Deploy from GitHub
+3. Railway auto-detects the Python app. Set the **Start command**:
+   ```
+   uvicorn server:app --host 0.0.0.0 --port $PORT
+   ```
+4. Done — Railway gives you a public URL instantly.
+
+### Render
+
+1. Push to GitHub
+2. [render.com](https://render.com) → New Web Service → Connect repo
+3. Build command: `pip install -r requirements.txt`
+4. Start command: `uvicorn server:app --host 0.0.0.0 --port $PORT`
+5. Free tier keeps the server alive as long as someone connects every 15 min.
+
+### Fly.io
+
+```bash
+pip install flyctl
+flyctl launch           # generates fly.toml
+flyctl deploy
+```
+
+Add a `Procfile`:
+```
+web: uvicorn server:app --host 0.0.0.0 --port $PORT
+```
+
+---
+
+## Gameplay
+
+| Action | How |
+|--------|-----|
+| Draw from deck | Click the deck card |
+| Take top discard | Click the discard pile card |
+| Reorder hand | ← → buttons below each card |
+| Discard a card | ↓ button below each card (↓ = normal, ✋ = Stop!, 🏅 = Chinchón!) |
+| Declare Win | **✋ Declare Win** button in the header (scores immediately, even incomplete) |
+| Reset | 🔄 button in header |
+
+## Scoring
+
+- **Winner of a hand** (stops with 2 valid sets): **−10 points** (bonus)
+- **Loser**: pays the sum of their unmatched cards (A=1, 2–7=face value, 10/11/12=10)
+- **Chinchón** (7 consecutive same-suit): instant **match win** regardless of scores
+- **First to 100 points loses** the match
+
+## Rules
+
+- 40-card Baraja Española: Oros 🪙, Copas 🍷, Espadas ⚔️, Bastos 🏑
+- Values: A 2 3 4 5 6 7 10(Sota) 11(Caballo) 12(Rey) — no 8 or 9
+- **7 and 10 are consecutive** (key Spanish deck rule)
+- Valid **sequence**: 3+ consecutive cards, same suit
+- Valid **group**: 3 or 4 cards, same value
+- **Winning hand**: two valid sets covering all 7 cards (e.g. 3+4)
